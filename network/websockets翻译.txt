@@ -102,6 +102,87 @@ Browser ! #{ cmd => fill_div, id => clock, txt => current_time() }
 
 18.2 基本的交互
 
+我们的下一个例子有一个可以滚动的文本区域和一个输入框。当你在输入框中输入一个文本并且点击回车键，一个信息就被传递到浏览器中。浏览器响应这个信息去更新文本区域的显示。
+
+HTML 代码如下所示：
+websockets/interact1.html
+<script type="text/javascript" src="./jquery-1.7.1.min.js"></script>
+<script type="text/javascript" src="./websock.js"></script>
+<link rel="stylesheet" href="./interact1.css" type="text/css">
+<body>
+<h2>Interaction</h2>
+<div id="scroll"></div>
+<br>
+<input id="input" class="live_input"></input>
+</body>
+<script>
+$(document).ready(function(){
+	connect("localhost", 2233, "interact1");
+	});
+</script>
+
+Erlang 代码如下所示：
+websockets/interact1.erl
+-module(interact1).
+-export([start/1]).
+
+start(Browser) -> running(Browser).
+
+running(Browser) ->
+	receive
+		{Browser, #{entry => <<"input">>, txt => Bin} }
+			Time = clock1:current_time(),
+			Browser ! #{cmd => append_div, id => scroll,
+				txt => list_to_binary([Time, " > ", Bin, "<br>"])}
+	end,
+	running(Browser).
+
+这个例子和时钟例子是相同的原理。当用户点击回车键的时候，输入框就发送一个带有文本的信息给Erlang 进程，Erlang 进程收到这条信息，发送一条信息给浏览器更新显示。
+
+18.3 在浏览器中的Erlang Shell
+
+我们可以用上面的形式在浏览器中做一个Erlang Shell。
+
+我们不会把所有的代码贴出来，只把最相关的代码展示如下：
+websockets/shell1.erl
+start(Browser) ->
+	Browser ! #{cmd => append_div, id => scroll,
+		txt => <<"Starting Erlang shell:<br>">>},
+	B0 = erl_eval:new_bindings(),
+	running(Browser, B0, 1).
+running(Browser, B0, N) ->
+	receive
+		{Browser, #{entry => <<"input">>}, txt => Bin}} ->
+		{Value, B1} = string2value(binary_to_list(Bin), B0),
+		BV = bf("~w > <font color='red'>~s</font><br>~p<br>",
+			[N, Bin, Value]),
+	Browser ! #{cmd => append_div, id => scroll, txt => BV},
+	running(Browser, B1, N+1)
+end.
+
+最有技巧的地方就是如何解析和计算输入字符串的：
+websockets/shell1.erl
+string2value(Str, Bindings0) ->
+	case erl_scan:string(Str, 0) of
+		{ok, Tokens, _} ->
+		case erl_parse:parse_exprs(Tokens) of
+			{ok, Exprs} ->
+				{value, Val, Bindings1} = erl_eval:exprs(Exprs, Bindings0),
+				{Val, Bindings1};
+				Other ->
+				io:format("cannot parse:~p Reason=~p~n",[Tokens,Other]),
+					{parse_error, Bindings0}
+		end;
+	Other ->
+		io:format("cannot tokenise:~p Reason=~p~n",[Str,Other])
+end.
+
+现在我们有了一个在浏览器中运行的Erlang Shell，尽管这是一个很简陋的Shell，但是这里面的原理是所有更复杂Shell 都共有的。
+
+
+
+
+
 
 
 
