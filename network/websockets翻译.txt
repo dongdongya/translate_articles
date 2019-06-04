@@ -1,0 +1,110 @@
+第 18 章  在浏览器中用Erlang开发websockets 
+
+在这一章中，我们将看到如何在浏览器中开发应用，并且将信息传递的思路拓展到Erlang 之外。用这种方法，我们可以很容易的开发分布式应用，并把它们整合到浏览器中。
+Erlang 认为浏览器是另一个Erlang 进程，这种思路简化了我们的编程模型，把所有的东西都纳入到相同的概念框架中。
+
+我们接下来把浏览器当做一个Erlang 进程来处理。如果我们想要浏览器做一些事情，我们就发送一个信息；如果浏览器中发生了一些需要我们参与的事情，浏览器就给我们发送一个信息。
+这一切可以实现都要归功于websockets。Websockets 是HTML5 标准的一部分，是一个双向异步的sockets，它能够在浏览器和一个外部程序之间传递信息。在我们这个例子中，外部程序指
+的是Erlang 运行时系统。
+
+为了将Erlang 运行时系统连接到websockets，我们运行一个简单的Erlang web服务器，叫做cowboy，用来管理socket 和websocket 协议。安装cowboy 的细节在第25章中。为了简化这个例
+子，我们假设在Erlang 和浏览器中传递的是JSON 格式的。
+
+在Erlang 这一端信息用Erlang maps（参见section 5.3）来表示，在浏览器中信息用javascript 对象来表示。
+
+在这一章剩下的部分，我们会展示六个示例程序，包括在浏览器和在服务器上运行的代码。最后，我们会学习客户端-服务器端的协议以及信息是如何在Erlang 和浏览器之间传递的。
+
+为了运行这些示例，我们需要三个东西：在浏览器上运行的代码，在Erlang 服务器上运行的代码和一个理解websocket协议的Erlang 服务器。在这里，我们只看运行在浏览器和Erlang 服务
+器上的代码。所有的示例都可以在https://github.com/joearms/ezwebframe这个网址上找到。浏览器上运行的代码只在Chrome 浏览器上测试过。
+
+注意：这里展示的代码是ezwebframe仓库中的简化版。这里的代码用的是maps。仓库中的代码和Erlang 分支保持同步。
+
+如果你想运行这些代码，你需要下载这些代码，并且按提示安装。我们认为最有趣的代码就是运行在浏览器和服务器上的代码。
+
+所有的示例都使用一种简单的技术用Erlang 服务器来控制浏览器。如果Erlang 想要浏览器做一些事情，它只需要给浏览器发送一个信息告诉它做什么。如果用户想做一些事情，他们点击按钮
+或者浏览器上的一些控件，一个信息就发送到Erlang 上。第一个示例解释了是如何实现的。
+
+18.1 创建一个数字钟
+下面的图展示了一个运行在浏览器上的钟。所有浏览器上无关的细节，例如菜单、工具栏和滚动条都没有展示出来，所以我们可以集中精力在代码上面。
+
+这个应用最基本的部分是展示，它展示一个时间，每秒钟更新一次。从Erlang 的视角来看，整个浏览器是一个进程，为了更新时钟，Erlang 发送给浏览器的信息如下：
+Browser ! #{cmd => fill_div, id => clock, txt => <<"16:30:52">>}
+
+在浏览器中，我们加载了一个HTML 页面，这个页面有一个HTML 片段如下：
+<div id='clock'>
+...
+</div>
+
+当浏览器接收到fill_div，它把它转换成json fill_div({cmd:'fill_div', id:'clock', txt:'16:30:52'})，用这个json 去填充浏览器中的div。
+
+注意包含时间的Erlang 信息是如何转换成等价的javascript 函数调用的，这个调用在浏览器中完成。扩展系统很容易，你需要做的只有写一个小的js 脚本函数处理Erlang 信息。
+
+为了完成上述的例子，我们需要增加启动和停止时钟的按钮。完成的HTML 代码如下：
+
+websockets/clock1.html
+<script type="text/javascript" src="./jquery-1.7.1.min.js"></script>
+<script type="text/javascript" src="./websock.js"></script>
+<link rel="stylesheet" href="./clock1.css" type="text/css">
+<body>
+<div id="clock"></div>
+<button id="start" class="live_button">start</button>
+<button id="stop" class="live_button">stop</button>
+</body>
+<script>
+$(document).ready(function(){
+connect("localhost", 2233, "clock1");
+});
+</script>
+
+首先，我们加载了两个js 库和一个css 格式表，clock1.css 是展示式样表。
+
+第二步，HTML 代码用来创建显示。最后，我们有一小段js 代码，当页面加载的时候运行。
+
+websokc.js 包含所有打开websocket 和连接浏览器DOM 里面的对象到Erlang 的所有代码。它完成如下的任务：
+1. 把页面中的live_button 和操作句柄连接起来。当按钮被点击的时候句柄向Erlang 服务器发送信息；
+2. 试图建立到http://localhost:2233 的websocket 连接，在服务器端，函数clock:start(Browser)将被调用。这些都是通过js 语句connect("localhost", 2233, "clock1"); 实现的，
+2233没有特殊含义，只要超过1023就可以了。
+
+下面是Erlang 服务器端的代码：
+websockets/clock1.erl
+-module(clock1).
+-export([start/1, current_time/0]).
+
+start(Browser) ->
+	Browser ! #{ cmd => fill_div, id => clock, txt => current_time() },
+	running(Browser).
+	
+running(Browser) ->
+	receive
+		{Browser, #{ clicked => <<"stop">>} } ->idle(Browser)
+	after 1000 ->
+		Browser ! #{ cmd => fill_div, id => clock, txt => current_time() },
+		running(Browser)
+	end.
+
+idle(Browser) ->
+	receive
+		{Browser, #{clicked => <<"start">>} } ->
+			running(Browser)
+	end.
+
+current_time() ->
+	{Hour,Min,Sec} = time(),
+	list_to_binary(io_lib:format("~2.2.0w:~2.2.0w:~2.2.0w",[Hour,Min,Sec])).
+
+Erlang 代码从start(Browser) 开始执行，Browser 是代表浏览器的进程。下面是第一行有趣的代码：
+Browser ! #{ cmd => fill_div, id => clock, txt => current_time() }
+
+这行代码更新时钟的显示。我重复这行代码以示强调。我的编辑器一直提醒我删掉它，但是我认为这是一句优美的代码。为了让浏览器做一些事情，我们给它发送信息。就像Erlang 一样，我们
+驯服了浏览器，它就像一个Erlang 进程。好棒！
+
+初始化之后，clock1 调用running/1.如果收到一个{clicked => <<"stop">>}信息，我们就调用idle(Browser)。否则，一秒钟之后，我们发送一个指令给浏览器让它更新时钟并且调用我们自己。
+
+18.2 基本的交互
+
+
+
+
+
+
+
